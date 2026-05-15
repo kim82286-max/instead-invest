@@ -537,7 +537,7 @@ export default function App(){
     const pricePerShare = totalCostKRW / sh; // 원화 기준 1주당 평균단가
     const nr=[...records,{ id:Date.now().toString(), item:form.item, ticker, buyPrice:pricePerShare, shares:sh, totalCost:totalCostKRW, category:form.category, date:form.date }]
       .sort((a,b)=>new Date(a.date)-new Date(b.date));
-    save(nr); setForm({...form,item:"",ticker:"",buyPrice:"",shares:"",date:localDateStr()}); setPage("dashboard");
+    save(nr); setForm({...form,item:"",ticker:"",buyPrice:"",buyPriceDisplay:"",shares:"",date:localDateStr()}); setPage("dashboard");
   };
   const handleDelete=id=>save(records.filter(r=>r.id!==id));
 
@@ -908,10 +908,17 @@ export default function App(){
         <div className="fg">
           <label className="fl">매수 정보</label>
           <div className="fi-row">
-            <input className="fi" type="number" step="1"
+            <input className="fi" type="text" inputMode="numeric"
               placeholder="총 매수금액 (원)"
-              value={form.buyPrice}
-              onChange={e=>setForm({...form,buyPrice:e.target.value})}/>
+              value={form.buyPriceDisplay||""}
+              onChange={e=>{
+                const raw=e.target.value.replace(/[^0-9]/g,"");
+                const num=parseInt(raw||"0",10);
+                setForm({...form,
+                  buyPriceDisplay: raw===""?"":num.toLocaleString("ko-KR"),
+                  buyPrice: raw===""?"":raw,
+                });
+              }}/>
             <input className="fi" type="number" step="0.000001" placeholder="수량 (주)"
               value={form.shares}
               onChange={e=>setForm({...form,shares:e.target.value})}/>
