@@ -901,12 +901,15 @@ export default function App(){
         <div className="fg">
           <label className="fl">매수 정보</label>
           <div className="fi-row">
-            <input className="fi" type="number" placeholder="매수가" value={form.buyPrice} onChange={e=>setForm({...form,buyPrice:e.target.value})}/>
+            <input className="fi" type="number" placeholder={isKR(tk)?"매수가 (원)":"매수가 (달러 $)"} value={form.buyPrice} onChange={e=>setForm({...form,buyPrice:e.target.value})}/>
             <input className="fi" type="number" step="0.0001" placeholder="수량 (주)" value={form.shares} onChange={e=>setForm({...form,shares:e.target.value})}/>
             <input className="fi" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
           </div>
           {form.buyPrice&&form.shares&&totalCost>0&&(
-            <div className="total-preview">💰 총 매수금액 · {sym(tk)}{totalCost.toLocaleString()}</div>
+            <div className="total-preview">
+              💰 총 매수금액 · ₩{Math.round(toKRW(totalCost, tk)).toLocaleString("ko-KR")}
+              {!isKR(tk)&&<span style={{fontSize:11,opacity:.7,marginLeft:6}}>(${totalCost.toLocaleString()} × {USD_TO_KRW}원)</span>}
+            </div>
           )}
         </div>
         <button className="submit-btn" onClick={handleAdd} disabled={!form.item||!form.ticker||!form.buyPrice||!form.shares}>
