@@ -44,15 +44,16 @@ const NAME_TO_TK = Object.fromEntries(Object.entries(KR_NAMES).map(([k,v])=>[v,k
 function resolve(input){ const t=input.trim(); return NAME_TO_TK[t]||t.toUpperCase(); }
 function displayName(tk){ return KR_NAMES[tk]||tk; }
 function isKR(tk){ return tk.endsWith(".KS")||tk.endsWith(".KQ"); }
-function sym(tk){ return isKR(tk)?"₩":"$"; }
+const USD_TO_KRW = 1400;
+function sym(tk){ return "₩"; }
+function toKRW(n, tk){ return isKR(tk) ? n : n * USD_TO_KRW; }
 function fmtKRW(n){
   if(n>=1e8) return (n/1e8).toFixed(1)+"억";
   if(n>=1e4) return Math.round(n/1e4).toLocaleString()+"만";
   return Math.round(n).toLocaleString();
 }
-function fmtMoney(n,tk){
-  if(isKR(tk)) return "₩"+Math.round(n).toLocaleString("ko-KR");
-  return "$"+(+n.toFixed(2)).toLocaleString("en-US",{minimumFractionDigits:2});
+function fmtMoney(n, tk){
+  return "₩"+Math.round(toKRW(n,tk)).toLocaleString("ko-KR");
 }
 
 const CSS = `
@@ -533,7 +534,7 @@ export default function App(){
   };
   const handleDelete=id=>save(records.filter(r=>r.id!==id));
 
-  const totalInvested = useMemo(()=>records.reduce((s,r)=>{ const c=r.totalCost||(r.buyPrice*r.shares); return s+(isKR(r.ticker)?c:c*1400); },0),[records]);
+  const totalInvested = useMemo(()=>records.reduce((s,r)=>{ const c=r.totalCost||(r.buyPrice*r.shares); return s+toKRW(c,r.ticker); },0),[records]);
 
   const stockSummary = useMemo(()=>{
     const map={};
@@ -545,12 +546,17 @@ export default function App(){
     return Object.values(map).map(s=>{
       const pi=prices[s.ticker]; const avg=s.totalCost/s.totalShares;
       let cv=null,gl=null,gp=null;
-      if(pi){ cv=s.totalShares*pi.price; gl=cv-s.totalCost; gp=gl/s.totalCost*100; }
+      if(pi){
+        const priceKRW = toKRW(pi.price, s.ticker);
+        cv = s.totalShares * priceKRW;
+        gl = cv - s.totalCost;
+        gp = gl/s.totalCost*100;
+      }
       return{...s,pi,cv,gl,gp,avg};
     });
   },[records,prices]);
 
-  const totalCV = useMemo(()=>stockSummary.reduce((s,st)=>{ if(!st.cv) return s; return s+(isKR(st.ticker)?st.cv:st.cv*1400); },0),[stockSummary]);
+  const totalCV = useMemo(()=>stockSummary.reduce((s,st)=>{ if(!st.cv) return s; return s+st.cv; },0),[stockSummary]);
   const hasPrices = useMemo(()=>stockSummary.some(s=>s.pi!=null),[stockSummary]);
   const pl = hasPrices ? totalCV-totalInvested : null;
   const plp = pl!=null && totalInvested>0 ? (pl/totalInvested)*100 : null;
@@ -725,17 +731,17 @@ export default function App(){
               <div className="sec-title">종목별 요약</div>
             </div>
             {stockSummary.map(s=>{
-              const dn=displayName(s.ticker); const cs=sym(s.ticker);
+              const dn=displayName(s.ticker); 
               const av=avatarColor(s.ticker);
               return(
                 <div key={s.ticker} className="stock-card">
                   <div className="stock-avatar" style={{background:av.bg,color:av.color}}>{dn.slice(0,2)}</div>
                   <div className="stock-info">
                     <div className="stock-name">{dn}</div>
-                    <div className="stock-meta">{s.count}회 · {s.totalShares.toFixed(s.totalShares<1?4:2)}주 · 평균 {hidden?"●●●":(`${cs}${Math.round(s.avg).toLocaleString()}`)}</div>
+                    <div className="stock-meta">{s.count}회 · {s.totalShares.toFixed(s.totalShares<1?4:2)}주 · 평균 {hidden?"●●●":(`₩${fmtKRW(s.avg)}`)}</div>
                   </div>
                   <div className="stock-right">
-                    {s.pi&&<div className="stock-price">{hidden?"●●●":`${cs}${s.pi.price?.toLocaleString()}`}</div>}
+                    {s.pi&&<div className="stock-price">{hidden?"●●●":`₩${fmtKRW(toKRW(s.pi.price,s.ticker))}`}</div>}
                     {s.gl!=null&&(
                       <div className="gain-pill" style={{background:s.gl>=0?T.greenL:T.redL,color:s.gl>=0?T.green:T.red}}>
                         {hidden?"●●%":`${s.gl>=0?"+":""}${s.gp.toFixed(1)}%`}
@@ -762,7 +768,7 @@ export default function App(){
               <div className="cat-wrap">
                 {CATS.map(cat=>{
                   const tot=records.filter(r=>r.category===cat.id).reduce((s,r)=>{
-                    const c=r.totalCost||(r.buyPrice*r.shares); return s+(isKR(r.ticker)?c:c*1400);
+                    const c=r.totalCost||(r.buyPrice*r.shares); return s+toKRW(c,r.ticker);
                   },0);
                   if(tot===0) return null;
                   const pct=totalInvested>0?(tot/totalInvested)*100:0;
@@ -799,7 +805,7 @@ export default function App(){
             const pi=prices[r.ticker];
             const cost=r.totalCost||(r.buyPrice*r.shares);
             let gainEl=null;
-            if(pi){ const cv=r.shares*pi.price,gl=cv-cost,gp=gl/cost*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}{fmtMoney(Math.abs(gl),r.ticker)} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
+            if(pi){ const cv=r.shares*toKRW(pi.price,r.ticker),cost2=toKRW(cost,r.ticker),gl=cv-cost2,gp=gl/cost2*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}{fmtMoney(Math.abs(gl),r.ticker)} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
             return(
               <div key={r.id} className="rec-card">
                 <button className="rec-del" onClick={()=>handleDelete(r.id)}>×</button>
@@ -821,7 +827,7 @@ export default function App(){
         stockSummary.length===0
           ?<div className="empty-state"><div className="empty-icon">📊</div><div className="empty-txt">종목 데이터가 없어요</div></div>
           :stockSummary.map(s=>{
-            const dn=displayName(s.ticker); const cs=sym(s.ticker); const av=avatarColor(s.ticker);
+            const dn=displayName(s.ticker);  const av=avatarColor(s.ticker);
             return(
               <div key={s.ticker} className="stock-card" style={{flexDirection:"column",alignItems:"flex-start",gap:12}}>
                 <div style={{display:"flex",alignItems:"center",gap:12,width:"100%"}}>
@@ -833,7 +839,7 @@ export default function App(){
                   {s.pi&&<div className="gain-pill" style={{background:T.goldL,color:T.gold,fontSize:12}}>{cs}{s.pi.price?.toLocaleString()}</div>}
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,width:"100%"}}>
-                  {[["평균단가",`${cs}${Math.round(s.avg).toLocaleString()}`],["투자원금",`${cs}${Math.round(s.totalCost).toLocaleString()}`],s.cv!=null?["평가금액",`${cs}${Math.round(s.cv).toLocaleString()}`]:["평가금액","—"]].map(([l,v])=>(
+                  {[["평균단가",`₩${fmtKRW(s.avg)}`],["투자원금",`₩${fmtKRW(s.totalCost)}`],s.cv!=null?["평가금액",`₩${fmtKRW(s.cv)}`]:["평가금액","—"]].map(([l,v])=>(
                     <div key={l} style={{background:T.bg,borderRadius:14,padding:"10px 12px"}}>
                       <div style={{fontSize:10,fontWeight:700,color:T.muted,marginBottom:3}}>{l}</div>
                       <div style={{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:700}}>{v}</div>
@@ -913,13 +919,57 @@ export default function App(){
   const NAV=[
     {id:"dashboard",icon:"🏠",label:"홈"},
     {id:"records",icon:"📋",label:"기록"},
-    {id:"compare",icon:"⚔️",label:"비교"},
-    {id:"report",icon:"📆",label:"리포트"},
-    {id:"timer",icon:"⏱️",label:"타이머"},
     {id:"add",icon:"➕",label:"추가"},
   ];
 
-  /* ── 충동 방지 타이머 ── */
+  return(
+    <>
+      <style>{CSS}</style>
+      <div className="root">
+        <nav className="sidebar">
+          <div className="logo-wrap">
+            <span className="logo-emoji">🔥</span>
+            <div className="logo-name">이거 대신<br/>주식 샀다</div>
+            <div className="logo-sub">소비 충동 투자 기록장</div>
+          </div>
+          {NAV.map(n=>(
+            <div key={n.id} className={`nav-item ${page===n.id?"active":""}`} onClick={()=>setPage(n.id)}>
+              <span className="nav-icon">{n.icon}</span>{n.label}
+            </div>
+          ))}
+          {streak>0&&(
+            <div className="sidebar-footer">
+              <div className="streak-card">
+                <div style={{fontSize:26}}>🔥</div>
+                <div><div className="streak-num">{streak}일</div><div className="streak-label">연속 투자 중!</div></div>
+              </div>
+            </div>
+          )}
+        </nav>
+
+        <div className="main">
+          {page!=="dashboard"&&(
+            <div className="page-hdr">
+              <div className="page-title">{page==="records"?"📋 매수 기록":"✍️ 기록 추가"}</div>
+              {page==="records"&&<button className="refresh-btn" onClick={fetchPrices} disabled={loading}>{loading?<><Spinner/>갱신</>:"↻ 시세"}</button>}
+            </div>
+          )}
+          {page==="dashboard"&&PageDashboard}
+          {page==="records"&&PageRecords}
+          {page==="add"&&PageAdd}
+        </div>
+
+        <div className="bottom-nav">
+          {NAV.map(n=>(
+            <div key={n.id} className={`bn-item ${page===n.id?"active":""}`} onClick={()=>setPage(n.id)}>
+              <span className="bn-icon">{n.icon}</span>{n.label}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
   const [timerSec, setTimerSec] = useState(600);
   const [timerOn,  setTimerOn]  = useState(false);
   const [timerDone,setTimerDone]= useState(false);
@@ -1075,7 +1125,7 @@ export default function App(){
 
   const monthInvested=useMemo(()=>monthRecords.reduce((s,r)=>{
     const c=r.totalCost||(r.buyPrice*r.shares);
-    return s+(isKR(r.ticker)?c:c*1400);
+    return s+toKRW(c,r.ticker);
   },0),[monthRecords]);
 
   const monthCV=useMemo(()=>{
