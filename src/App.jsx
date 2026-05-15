@@ -812,7 +812,7 @@ export default function App(){
             const pi=prices[r.ticker];
             const cost=r.totalCost||(r.buyPrice*r.shares);
             let gainEl=null;
-            if(pi){ const cost2=r.totalCost||(r.buyPrice*r.shares); const cv=r.shares*toKRW(pi.price,r.ticker),gl=cv-cost2,gp=gl/cost2*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}{fmtMoney(Math.abs(gl),r.ticker)} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
+            if(pi){ const cv=r.shares*toKRW(pi.price,r.ticker),gl=cv-cost,gp=gl/cost*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}₩{Math.round(Math.abs(gl)).toLocaleString()} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
             return(
               <div key={r.id} className="rec-card">
                 <button className="rec-del" onClick={()=>handleDelete(r.id)}>×</button>
@@ -822,7 +822,7 @@ export default function App(){
                   <div className="rec-desc">{r.date} · {r.item} · {r.shares}주</div>
                 </div>
                 <div className="rec-right">
-                  <div className="rec-amt">{fmtMoney(cost,r.ticker)}</div>
+                  <div className="rec-amt">₩{Math.round(cost).toLocaleString()}</div>
                   {gainEl}
                 </div>
               </div>
