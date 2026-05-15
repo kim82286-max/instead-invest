@@ -525,16 +525,17 @@ export default function App(){
 
   const handleAdd=()=>{
     if(!form.item||!form.ticker||!form.buyPrice||!form.shares) return;
-    const bp=parseFloat(form.buyPrice), sh=parseFloat(form.shares);
-    if(isNaN(bp)||bp<=0||isNaN(sh)||sh<=0) return;
+    const totalCostKRW=parseFloat(form.buyPrice), sh=parseFloat(form.shares);
+    if(isNaN(totalCostKRW)||totalCostKRW<=0||isNaN(sh)||sh<=0) return;
     const ticker=resolve(form.ticker);
-    const nr=[...records,{ id:Date.now().toString(), item:form.item, ticker, buyPrice:bp, shares:sh, totalCost:bp*sh, category:form.category, date:form.date }]
+    const pricePerShare = totalCostKRW / sh; // 원화 기준 1주당 평균단가
+    const nr=[...records,{ id:Date.now().toString(), item:form.item, ticker, buyPrice:pricePerShare, shares:sh, totalCost:totalCostKRW, category:form.category, date:form.date }]
       .sort((a,b)=>new Date(a.date)-new Date(b.date));
     save(nr); setForm({...form,item:"",ticker:"",buyPrice:"",shares:""}); setPage("dashboard");
   };
   const handleDelete=id=>save(records.filter(r=>r.id!==id));
 
-  const totalInvested = useMemo(()=>records.reduce((s,r)=>{ const c=r.totalCost||(r.buyPrice*r.shares); return s+toKRW(c,r.ticker); },0),[records]);
+  const totalInvested = useMemo(()=>records.reduce((s,r)=>{ const c=r.totalCost||(r.buyPrice*r.shares); return s+c; },0),[records]);
 
   const stockSummary = useMemo(()=>{
     const map={};
@@ -805,7 +806,7 @@ export default function App(){
             const pi=prices[r.ticker];
             const cost=r.totalCost||(r.buyPrice*r.shares);
             let gainEl=null;
-            if(pi){ const cv=r.shares*toKRW(pi.price,r.ticker),cost2=toKRW(cost,r.ticker),gl=cv-cost2,gp=gl/cost2*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}{fmtMoney(Math.abs(gl),r.ticker)} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
+            if(pi){ const cost2=r.totalCost||(r.buyPrice*r.shares); const cv=r.shares*toKRW(pi.price,r.ticker),gl=cv-cost2,gp=gl/cost2*100; gainEl=<div className="rec-gain" style={{color:gl>=0?T.green:T.red}}>{gl>=0?"+":""}{fmtMoney(Math.abs(gl),r.ticker)} ({gl>=0?"+":""}{gp.toFixed(1)}%)</div>; }
             return(
               <div key={r.id} className="rec-card">
                 <button className="rec-del" onClick={()=>handleDelete(r.id)}>×</button>
@@ -901,14 +902,22 @@ export default function App(){
         <div className="fg">
           <label className="fl">매수 정보</label>
           <div className="fi-row">
-            <input className="fi" type="number" placeholder={isKR(tk)?"매수가 (원)":"매수가 (달러 $)"} value={form.buyPrice} onChange={e=>setForm({...form,buyPrice:e.target.value})}/>
-            <input className="fi" type="number" step="0.0001" placeholder="수량 (주)" value={form.shares} onChange={e=>setForm({...form,shares:e.target.value})}/>
-            <input className="fi" type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
+            <input className="fi" type="number" step="1"
+              placeholder="총 매수금액 (원)"
+              value={form.buyPrice}
+              onChange={e=>setForm({...form,buyPrice:e.target.value})}/>
+            <input className="fi" type="number" step="0.000001" placeholder="수량 (주)"
+              value={form.shares}
+              onChange={e=>setForm({...form,shares:e.target.value})}/>
+            <input className="fi" type="date" value={form.date}
+              onChange={e=>setForm({...form,date:e.target.value})}/>
           </div>
-          {form.buyPrice&&form.shares&&totalCost>0&&(
+          {form.buyPrice&&form.shares&&parseFloat(form.buyPrice)>0&&parseFloat(form.shares)>0&&(
             <div className="total-preview">
-              💰 총 매수금액 · ₩{Math.round(toKRW(totalCost, tk)).toLocaleString("ko-KR")}
-              {!isKR(tk)&&<span style={{fontSize:11,opacity:.7,marginLeft:6}}>(${totalCost.toLocaleString()} × {USD_TO_KRW}원)</span>}
+              💰 총 매수금액 ₩{Math.round(parseFloat(form.buyPrice)).toLocaleString("ko-KR")}
+              <span style={{fontSize:11,opacity:.7,marginLeft:8}}>
+                · 평균단가 ₩{Math.round(parseFloat(form.buyPrice)/parseFloat(form.shares)).toLocaleString("ko-KR")}/주
+              </span>
             </div>
           )}
         </div>
