@@ -459,29 +459,68 @@ export default function App(){
 
   const save = useCallback(async nr=>{ setRecords(nr); try{ await window.storage.set(STORAGE_KEY,JSON.stringify(nr)); }catch(e){ console.error(e); } },[]);
 
+  const FINNHUB_KEY = import.meta.env.VITE_FINNHUB_API_KEY;
+  const TWELVEDATA_KEY = import.meta.env.VITE_TWELVEDATA_API_KEY;
+
+  // 캐시: 1시간 이내 조회한 시세는 재사용
+  const CACHE_KEY = "price-cache-v1";
+  const CACHE_TTL = 60 * 60 * 1000; // 1시간
+
+  const loadCache = () => {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY)||"{}"); } catch { return {}; }
+  };
+  const saveCache = (cache) => {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+  };
+
+  const fetchFinnhub = async (ticker) => {
+    const resp = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`
+    );
+    const data = await resp.json();
+    if (!data.c || data.c === 0) throw new Error("no data");
+    return { price: data.c, currency: "USD" };
+  };
+
+  const fetchTwelveData = async (ticker) => {
+    // 한국 주식: 005930.KS → 005930/KRX 형식으로 변환
+    const symbol = ticker.replace(".KS", "/KRX").replace(".KQ", "/KOSDAQ");
+    const resp = await fetch(
+      `https://api.twelvedata.com/price?symbol=${symbol}&apikey=${TWELVEDATA_KEY}`
+    );
+    const data = await resp.json();
+    if (!data.price) throw new Error("no data");
+    return { price: parseFloat(data.price), currency: "KRW" };
+  };
+
   const fetchPrices = useCallback(async()=>{
     const tickers=[...new Set(records.map(r=>r.ticker))]; if(!tickers.length) return;
-    setLoading(true); const np={...prices};
+    setLoading(true);
+    const np={...prices};
+    const cache = loadCache();
+    const now = Date.now();
+
     for(const tk of tickers){
+      // 캐시 확인
+      if(cache[tk] && now - cache[tk].ts < CACHE_TTL){
+        np[tk] = cache[tk].data;
+        continue;
+      }
       try{
-        const resp=await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({
-            model:"claude-sonnet-4-20250514", max_tokens:1000,
-            tools:[{type:"web_search_20250305",name:"web_search"}],
-            messages:[{role:"user",content:`Current stock price of ${tk}? Reply ONLY JSON: {"price":<number>,"currency":"USD" or "KRW","name":"<name>"}. No other text.`}],
-          }),
-        });
-        const data=await resp.json();
-        const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-        const m=txt.replace(/```json|```/g,"").trim().match(/\{[^}]+\}/);
-        if(m) np[tk]=JSON.parse(m[0]);
-      }catch(e){ console.error(tk,e); }
+        let result;
+        if(isKR(tk)){
+          result = await fetchTwelveData(tk);
+        } else {
+          result = await fetchFinnhub(tk);
+        }
+        np[tk] = result;
+        cache[tk] = { data: result, ts: now };
+      }catch(e){ console.error(tk, e); }
     }
+
+    saveCache(cache);
     setPrices(np); setLoading(false);
   },[records,prices]);
-
-  useEffect(()=>{ if(records.length>0) fetchPrices(); },[records.length]);
 
   const handleAdd=()=>{
     if(!form.item||!form.ticker||!form.buyPrice||!form.shares) return;
@@ -512,7 +551,9 @@ export default function App(){
   },[records,prices]);
 
   const totalCV = useMemo(()=>stockSummary.reduce((s,st)=>{ if(!st.cv) return s; return s+(isKR(st.ticker)?st.cv:st.cv*1400); },0),[stockSummary]);
-  const pl=totalCV-totalInvested, plp=totalInvested>0?(pl/totalInvested)*100:0;
+  const hasPrices = useMemo(()=>stockSummary.some(s=>s.pi!=null),[stockSummary]);
+  const pl = hasPrices ? totalCV-totalInvested : null;
+  const plp = pl!=null && totalInvested>0 ? (pl/totalInvested)*100 : null;
   const recDates=useMemo(()=>new Set(records.map(r=>r.date)),[records]);
 
   const streak=useMemo(()=>{
@@ -641,10 +682,12 @@ export default function App(){
             <div className="dot" style={{background:T.purple}}/>
             원금 {hidden?"●●●●":<span style={{fontFamily:"'DM Mono',monospace"}}>₩{fmtKRW(totalInvested)}</span>}
           </div>
-          <div className="hero-chip" style={{color:pl>=0?T.green:T.red}}>
-            <div className="dot" style={{background:pl>=0?T.green:T.red}}/>
-            {hidden ? "●●●●" : <span style={{fontFamily:"'DM Mono',monospace"}}>{pl>=0?"+":""}₩{fmtKRW(Math.abs(pl))} ({pl>=0?"+":""}{plp.toFixed(1)}%)</span>}
-          </div>
+          {pl!=null&&(
+            <div className="hero-chip" style={{color:pl>=0?T.green:T.red}}>
+              <div className="dot" style={{background:pl>=0?T.green:T.red}}/>
+              {hidden ? "●●●●" : <span style={{fontFamily:"'DM Mono',monospace"}}>{pl>=0?"+":""}₩{fmtKRW(Math.abs(pl))} ({pl>=0?"+":""}{plp.toFixed(1)}%)</span>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -663,11 +706,15 @@ export default function App(){
             <div className="kpi-val" style={{color:T.purple}}>{hidden?"●●●●":<span style={{fontFamily:"'DM Mono',monospace"}}>₩{fmtKRW(totalInvested)}</span>}</div>
             <div className="kpi-sub" style={{color:T.purple}}>{records.length}번 참음</div>
           </div>
-          <div className="kpi-card" style={{background:pl>=0?T.greenL:T.redL}}>
-            <div className="kpi-icon">{pl>=0?"🚀":"📉"}</div>
-            <div className="kpi-lbl" style={{color:pl>=0?T.green:T.red}}>수익 / 손실</div>
-            <div className="kpi-val" style={{color:pl>=0?T.green:T.red}}>{hidden?"●●●●":<span style={{fontFamily:"'DM Mono',monospace"}}>{pl>=0?"+":""}₩{fmtKRW(Math.abs(pl))}</span>}</div>
-            <div className="kpi-sub" style={{color:pl>=0?T.green:T.red}}>{hidden?"●●%":`${pl>=0?"+":""}${plp.toFixed(2)}%`}</div>
+          <div className="kpi-card" style={{background:pl==null?T.purpleL:pl>=0?T.greenL:T.redL}}>
+            <div className="kpi-icon">{pl==null?"⏳":pl>=0?"🚀":"📉"}</div>
+            <div className="kpi-lbl" style={{color:pl==null?T.purple:pl>=0?T.green:T.red}}>수익 / 손실</div>
+            <div className="kpi-val" style={{color:pl==null?T.sub:pl>=0?T.green:T.red}}>
+              {pl==null?"—":hidden?"●●●●":<span style={{fontFamily:"'DM Mono',monospace"}}>{pl>=0?"+":""}₩{fmtKRW(Math.abs(pl))}</span>}
+            </div>
+            <div className="kpi-sub" style={{color:pl==null?T.muted:pl>=0?T.green:T.red}}>
+              {pl==null?"시세 갱신 후 표시":hidden?"●●%":`${pl>=0?"+":""}${plp.toFixed(2)}%`}
+            </div>
           </div>
         </div>
 
@@ -863,13 +910,274 @@ export default function App(){
     </div>
   );
 
-  const NAV=[{id:"dashboard",icon:"🏠",label:"홈"},{id:"records",icon:"📋",label:"기록"},{id:"add",icon:"➕",label:"추가"}];
+  const NAV=[
+    {id:"dashboard",icon:"🏠",label:"홈"},
+    {id:"records",icon:"📋",label:"기록"},
+    {id:"compare",icon:"⚔️",label:"비교"},
+    {id:"report",icon:"📆",label:"리포트"},
+    {id:"timer",icon:"⏱️",label:"타이머"},
+    {id:"add",icon:"➕",label:"추가"},
+  ];
+
+  /* ── 충동 방지 타이머 ── */
+  const [timerSec, setTimerSec] = useState(600);
+  const [timerOn,  setTimerOn]  = useState(false);
+  const [timerDone,setTimerDone]= useState(false);
+  const [timerItem,setTimerItem]= useState("");
+  const [timerAmt, setTimerAmt] = useState("");
+
+  useEffect(()=>{
+    if(!timerOn) return;
+    if(timerSec<=0){ setTimerOn(false); setTimerDone(true); return; }
+    const id=setTimeout(()=>setTimerSec(s=>s-1),1000);
+    return ()=>clearTimeout(id);
+  },[timerOn,timerSec]);
+
+  const timerMM=String(Math.floor(timerSec/60)).padStart(2,"0");
+  const timerSS=String(timerSec%60).padStart(2,"0");
+  const timerPct=((600-timerSec)/600)*100;
+
+  const PageTimer=(
+    <div className="content" style={{paddingTop:24,maxWidth:500}}>
+      <div className="form-card">
+        <div className="form-title">⏱️ 충동 방지 타이머</div>
+        <p style={{fontSize:13,color:T.sub,marginBottom:20,lineHeight:1.7}}>
+          지금 당장 사고 싶은 게 있나요?<br/>10분만 참으면 마음이 바뀔 수 있어요!
+        </p>
+
+        {!timerOn&&!timerDone&&(
+          <>
+            <div className="fg">
+              <label className="fl">지금 사고 싶은 것</label>
+              <input className="fi" placeholder="예: 치킨, 새 운동화..." value={timerItem} onChange={e=>setTimerItem(e.target.value)}/>
+            </div>
+            <div className="fg">
+              <label className="fl">얼마짜리?</label>
+              <input className="fi" type="number" placeholder="예: 25000" value={timerAmt} onChange={e=>setTimerAmt(e.target.value)}/>
+            </div>
+            <button className="submit-btn" onClick={()=>{setTimerSec(600);setTimerOn(true);setTimerDone(false);}}
+              disabled={!timerItem}>
+              🔥 10분 참기 시작!
+            </button>
+          </>
+        )}
+
+        {timerOn&&(
+          <div style={{textAlign:"center"}}>
+            {/* 원형 타이머 */}
+            <div style={{position:"relative",width:180,height:180,margin:"0 auto 24px"}}>
+              <svg width="180" height="180">
+                <circle cx="90" cy="90" r="80" fill="none" stroke={T.border} strokeWidth="10"/>
+                <circle cx="90" cy="90" r="80" fill="none" stroke={T.purple} strokeWidth="10"
+                  strokeDasharray={`${2*Math.PI*80}`}
+                  strokeDashoffset={`${2*Math.PI*80*(1-timerPct/100)}`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 90 90)"
+                  style={{transition:"stroke-dashoffset 1s linear"}}
+                />
+              </svg>
+              <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center"}}>
+                <div style={{fontFamily:"'DM Mono',monospace",fontSize:36,fontWeight:700,color:T.purple}}>{timerMM}:{timerSS}</div>
+                <div style={{fontSize:12,color:T.sub,marginTop:4}}>남은 시간</div>
+              </div>
+            </div>
+
+            <div style={{fontSize:15,fontWeight:700,marginBottom:8}}>{timerItem} 참는 중...</div>
+            {timerAmt&&(
+              <div style={{background:T.greenL,border:`1.5px solid rgba(18,216,138,.3)`,borderRadius:16,padding:"12px 16px",marginBottom:16,fontSize:13,color:T.green,fontWeight:700}}>
+                💡 ₩{parseInt(timerAmt).toLocaleString()}으로<br/>
+                NVDA {(parseInt(timerAmt)/130).toFixed(3)}주 살 수 있어요!
+              </div>
+            )}
+            <button onClick={()=>setTimerOn(false)} style={{background:"none",border:`1.5px solid ${T.border}`,borderRadius:99,padding:"8px 20px",fontSize:13,color:T.sub,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+              포기할래요 😢
+            </button>
+          </div>
+        )}
+
+        {timerDone&&(
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+            <div style={{fontSize:20,fontWeight:800,marginBottom:8}}>10분 참았어요!</div>
+            <div style={{fontSize:14,color:T.sub,marginBottom:24}}>대단해요! 이제 그 돈으로 주식 살까요?</div>
+            <button className="submit-btn" onClick={()=>{ setPage("add"); setTimerDone(false); setTimerItem(""); setTimerAmt(""); }}>
+              🚀 주식 기록하러 가기
+            </button>
+            <button onClick={()=>{ setTimerDone(false); setTimerItem(""); setTimerAmt(""); }}
+              style={{display:"block",width:"100%",marginTop:10,background:"none",border:`1.5px solid ${T.border}`,borderRadius:99,padding:"12px",fontSize:13,color:T.sub,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}>
+              처음으로
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  /* ── 비교 뷰 ── */
+  const PageCompare=(
+    <div className="content" style={{paddingTop:24}}>
+      {records.length===0?(
+        <div className="empty-state"><div className="empty-icon">⚔️</div><div className="empty-txt">기록이 없어요</div><div className="empty-sub">먼저 투자 기록을 추가해보세요!</div></div>
+      ):records.map(r=>{
+        const cat=CATS.find(c=>c.id===r.category);
+        const cost=r.totalCost||(r.buyPrice*r.shares);
+        const pi=prices[r.ticker];
+        const cv=pi?r.shares*pi.price:null;
+        const gl=cv!=null?cv-cost:null;
+        const gp=gl!=null&&cost>0?(gl/cost)*100:null;
+        return(
+          <div key={r.id} style={{background:T.card,border:`1.5px solid ${T.border}`,borderRadius:24,padding:"20px 22px",marginBottom:12}}>
+            <div style={{fontSize:12,color:T.sub,fontWeight:600,marginBottom:12}}>{r.date}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:12,alignItems:"center"}}>
+              {/* 왼쪽: 소비했다면 */}
+              <div style={{background:T.redL,borderRadius:18,padding:"16px",textAlign:"center"}}>
+                <div style={{fontSize:24,marginBottom:6}}>{cat?.icon||"💸"}</div>
+                <div style={{fontSize:12,color:T.red,fontWeight:700,marginBottom:4}}>{r.item}</div>
+                <div style={{fontFamily:"'DM Mono',monospace",fontSize:16,fontWeight:700,color:T.red}}>-{fmtMoney(cost,r.ticker)}</div>
+                <div style={{fontSize:11,color:T.sub,marginTop:4}}>지금 남은 것: 0원</div>
+              </div>
+
+              {/* VS */}
+              <div style={{fontSize:13,fontWeight:900,color:T.sub}}>VS</div>
+
+              {/* 오른쪽: 주식 샀다면 */}
+              <div style={{background:gl==null?T.purpleL:gl>=0?T.greenL:T.redL,borderRadius:18,padding:"16px",textAlign:"center"}}>
+                <div style={{fontSize:24,marginBottom:6}}>📈</div>
+                <div style={{fontSize:12,color:gl==null?T.purple:gl>=0?T.green:T.red,fontWeight:700,marginBottom:4}}>{displayName(r.ticker)} {r.shares}주</div>
+                <div style={{fontFamily:"'DM Mono',monospace",fontSize:16,fontWeight:700,color:gl==null?T.purple:gl>=0?T.green:T.red}}>
+                  {cv!=null?fmtMoney(cv,r.ticker):"시세 조회 필요"}
+                </div>
+                <div style={{fontSize:11,color:gl==null?T.sub:gl>=0?T.green:T.red,marginTop:4}}>
+                  {gl!=null?`${gl>=0?"+":""}${gp.toFixed(1)}% (${gl>=0?"+":""}${fmtMoney(Math.abs(gl),r.ticker)})`:"↻ 시세 갱신 후 표시"}
+                </div>
+              </div>
+            </div>
+            {gl!=null&&gl>0&&(
+              <div style={{marginTop:12,padding:"10px 14px",background:T.greenL,borderRadius:12,fontSize:13,color:T.green,fontWeight:700,textAlign:"center"}}>
+                🎉 {r.item} 대신 산 {displayName(r.ticker)}가 {gp.toFixed(1)}% 올랐어요!
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  /* ── 월별 리포트 ── */
+  const now2=new Date();
+  const [reportYear,  setReportYear]  = useState(now2.getFullYear());
+  const [reportMonth, setReportMonth] = useState(now2.getMonth()+1);
+
+  const monthRecords=useMemo(()=>records.filter(r=>{
+    const d=new Date(r.date);
+    return d.getFullYear()===reportYear&&d.getMonth()+1===reportMonth;
+  }),[records,reportYear,reportMonth]);
+
+  const monthInvested=useMemo(()=>monthRecords.reduce((s,r)=>{
+    const c=r.totalCost||(r.buyPrice*r.shares);
+    return s+(isKR(r.ticker)?c:c*1400);
+  },0),[monthRecords]);
+
+  const monthCV=useMemo(()=>{
+    return monthRecords.reduce((s,r)=>{
+      const pi=prices[r.ticker];
+      if(!pi) return s;
+      const cv=r.shares*pi.price;
+      return s+(isKR(r.ticker)?cv:cv*1400);
+    },0);
+  },[monthRecords,prices]);
+
+  const monthGL=monthRecords.some(r=>prices[r.ticker])?monthCV-monthInvested:null;
+  const monthGLP=monthGL!=null&&monthInvested>0?(monthGL/monthInvested)*100:null;
+
+  const bestRecord=useMemo(()=>{
+    let best=null,bestPct=-Infinity;
+    monthRecords.forEach(r=>{
+      const pi=prices[r.ticker]; if(!pi) return;
+      const cost=r.totalCost||(r.buyPrice*r.shares);
+      const cv=r.shares*pi.price;
+      const pct=(cv-cost)/cost*100;
+      if(pct>bestPct){bestPct=pct;best={...r,pct};}
+    });
+    return best;
+  },[monthRecords,prices]);
+
+  const MONTH_NAMES=["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
+
+  const PageReport=(
+    <div className="content" style={{paddingTop:24,maxWidth:640}}>
+      {/* 월 선택 */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,background:T.card,border:`1.5px solid ${T.border}`,borderRadius:20,padding:"12px 18px"}}>
+        <button onClick={()=>{ if(reportMonth===1){setReportMonth(12);setReportYear(y=>y-1);}else setReportMonth(m=>m-1); }}
+          style={{background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:99,width:32,height:32,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>‹</button>
+        <div style={{flex:1,textAlign:"center",fontSize:16,fontWeight:800}}>{reportYear}년 {MONTH_NAMES[reportMonth-1]}</div>
+        <button onClick={()=>{ if(reportMonth===12){setReportMonth(1);setReportYear(y=>y+1);}else setReportMonth(m=>m+1); }}
+          style={{background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:99,width:32,height:32,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>›</button>
+      </div>
+
+      {monthRecords.length===0?(
+        <div className="empty-state"><div className="empty-icon">📆</div><div className="empty-txt">이 달 기록이 없어요</div></div>
+      ):(
+        <>
+          {/* 요약 카드들 */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            <div style={{background:T.purpleL,borderRadius:20,padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:T.purple,fontWeight:700,marginBottom:6}}>이번 달 투자</div>
+              <div style={{fontFamily:"'DM Mono',monospace",fontSize:22,fontWeight:700,color:T.purple}}>₩{fmtKRW(monthInvested)}</div>
+              <div style={{fontSize:12,color:T.purple,marginTop:4,opacity:.7}}>{monthRecords.length}번 참음</div>
+            </div>
+            <div style={{background:monthGL==null?T.purpleL:monthGL>=0?T.greenL:T.redL,borderRadius:20,padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:monthGL==null?T.purple:monthGL>=0?T.green:T.red,fontWeight:700,marginBottom:6}}>이번 달 수익</div>
+              <div style={{fontFamily:"'DM Mono',monospace",fontSize:22,fontWeight:700,color:monthGL==null?T.sub:monthGL>=0?T.green:T.red}}>
+                {monthGL==null?"—":`${monthGL>=0?"+":""}₩${fmtKRW(Math.abs(monthGL))}`}
+              </div>
+              <div style={{fontSize:12,marginTop:4,color:monthGL==null?T.muted:monthGL>=0?T.green:T.red,opacity:.8}}>
+                {monthGLP!=null?`${monthGLP>=0?"+":""}${monthGLP.toFixed(1)}%`:"시세 갱신 필요"}
+              </div>
+            </div>
+          </div>
+
+          {/* 베스트 종목 */}
+          {bestRecord&&(
+            <div style={{background:T.goldBg,border:`1.5px solid #FFD580`,borderRadius:20,padding:"16px 20px",marginBottom:16}}>
+              <div style={{fontSize:12,color:T.gold,fontWeight:700,marginBottom:6}}>🏆 이번 달 베스트</div>
+              <div style={{fontSize:15,fontWeight:800}}>{displayName(bestRecord.ticker)}</div>
+              <div style={{fontSize:13,color:T.gold,fontWeight:700,fontFamily:"'DM Mono',monospace",marginTop:4}}>+{bestRecord.pct.toFixed(1)}% 수익</div>
+            </div>
+          )}
+
+          {/* 이번 달 기록 목록 */}
+          <div style={{fontSize:14,fontWeight:800,marginBottom:12}}>이번 달 기록</div>
+          {monthRecords.map(r=>{
+            const cat=CATS.find(c=>c.id===r.category);
+            const cost=r.totalCost||(r.buyPrice*r.shares);
+            const pi=prices[r.ticker];
+            const cv=pi?r.shares*pi.price:null;
+            const gl=cv!=null?cv-cost:null;
+            const gp=gl!=null&&cost>0?(gl/cost)*100:null;
+            return(
+              <div key={r.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:T.card,border:`1.5px solid ${T.border}`,borderRadius:16,marginBottom:8}}>
+                <div style={{width:36,height:36,borderRadius:12,background:cat?.bg||T.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{cat?.icon||"📦"}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:700}}>{displayName(r.ticker)}</div>
+                  <div style={{fontSize:11,color:T.sub,marginTop:1}}>{r.item} · {r.shares}주</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:700}}>{fmtMoney(cost,r.ticker)}</div>
+                  {gl!=null&&<div style={{fontSize:11,fontFamily:"'DM Mono',monospace",color:gl>=0?T.green:T.red,marginTop:2}}>{gl>=0?"+":""}{gp.toFixed(1)}%</div>}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
 
   return(
     <>
       <style>{CSS}</style>
       <div className="root">
-        {/* Sidebar */}
         <nav className="sidebar">
           <div className="logo-wrap">
             <span className="logo-emoji">🔥</span>
@@ -891,21 +1199,27 @@ export default function App(){
           )}
         </nav>
 
-        {/* Main */}
         <div className="main">
-          {/* Header for records/add pages */}
           {page!=="dashboard"&&(
             <div className="page-hdr">
-              <div className="page-title">{page==="records"?"📋 매수 기록":"✍️ 기록 추가"}</div>
-              {page==="records"&&<button className="refresh-btn" onClick={fetchPrices} disabled={loading}>{loading?<><Spinner/>갱신</>:"↻ 시세"}</button>}
+              <div className="page-title">
+                {page==="records"&&"📋 매수 기록"}
+                {page==="compare"&&"⚔️ 소비 vs 투자"}
+                {page==="report"&&"📆 월별 리포트"}
+                {page==="timer"&&"⏱️ 충동 방지 타이머"}
+                {page==="add"&&"✍️ 기록 추가"}
+              </div>
+              {(page==="records"||page==="compare")&&<button className="refresh-btn" onClick={fetchPrices} disabled={loading}>{loading?<><Spinner/>갱신</>:"↻ 시세"}</button>}
             </div>
           )}
           {page==="dashboard"&&PageDashboard}
           {page==="records"&&PageRecords}
+          {page==="compare"&&PageCompare}
+          {page==="report"&&PageReport}
+          {page==="timer"&&PageTimer}
           {page==="add"&&PageAdd}
         </div>
 
-        {/* Bottom nav (mobile) */}
         <div className="bottom-nav">
           {NAV.map(n=>(
             <div key={n.id} className={`bn-item ${page===n.id?"active":""}`} onClick={()=>setPage(n.id)}>
