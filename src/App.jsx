@@ -440,6 +440,12 @@ const AVATAR_COLORS = [
 ];
 function avatarColor(tk){ const i=tk.charCodeAt(0)%AVATAR_COLORS.length; return AVATAR_COLORS[i]; }
 
+// 로컬 날짜 반환 (타임존 보정)
+function localDateStr(){
+  const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
 export default function App(){
   const [records,  setRecords]  = useState([]);
   const [prices,   setPrices]   = useState({});
@@ -451,7 +457,7 @@ export default function App(){
   const [calSelected, setCalSelected] = useState(null);
   const [form,     setForm]     = useState({
     item:"", ticker:"", buyPrice:"", shares:"", category:"food",
-    date: new Date().toISOString().slice(0,10),
+    date: localDateStr(),
   });
 
   useEffect(()=>{
@@ -531,7 +537,7 @@ export default function App(){
     const pricePerShare = totalCostKRW / sh; // 원화 기준 1주당 평균단가
     const nr=[...records,{ id:Date.now().toString(), item:form.item, ticker, buyPrice:pricePerShare, shares:sh, totalCost:totalCostKRW, category:form.category, date:form.date }]
       .sort((a,b)=>new Date(a.date)-new Date(b.date));
-    save(nr); setForm({...form,item:"",ticker:"",buyPrice:"",shares:""}); setPage("dashboard");
+    save(nr); setForm({...form,item:"",ticker:"",buyPrice:"",shares:"",date:localDateStr()}); setPage("dashboard");
   };
   const handleDelete=id=>save(records.filter(r=>r.id!==id));
 
@@ -579,7 +585,7 @@ export default function App(){
   const renderCal=()=>{
     const{y,m}=calMo;
     const fd=new Date(y,m,1).getDay(), dim=new Date(y,m+1,0).getDate();
-    const today=new Date().toISOString().slice(0,10);
+    const today=localDateStr();
     const DAYS=["일","월","화","수","목","금","토"];
     const MONTHS=["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
     const cells=[];
@@ -643,7 +649,7 @@ export default function App(){
                     <div style={{width:34,height:34,borderRadius:12,background:cat?.bg||T.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{cat?.icon||"📦"}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:800}}>{displayName(r.ticker)}</div>
-                      <div style={{fontSize:11,color:T.sub,fontWeight:600,marginTop:1}}>{r.item} · {r.shares}주 @ {fmtMoney(r.buyPrice,r.ticker)}</div>
+                      <div style={{fontSize:11,color:T.sub,fontWeight:600,marginTop:1}}>{r.item} · {r.shares}주</div>
                     </div>
                     <div style={{textAlign:"right",flexShrink:0}}>
                       <div style={{fontSize:13,fontWeight:800,fontFamily:"'DM Mono',monospace"}}>{fmtMoney(cost,r.ticker)}</div>
@@ -813,7 +819,7 @@ export default function App(){
                 <div className="rec-cat-badge" style={{background:cat?.bg||T.bg}}>{cat?.icon||"📦"}</div>
                 <div className="rec-info">
                   <div className="rec-stock">{displayName(r.ticker)}</div>
-                  <div className="rec-desc">{r.date} · {r.item} · {r.shares}주 @ {fmtMoney(r.buyPrice,r.ticker)}</div>
+                  <div className="rec-desc">{r.date} · {r.item} · {r.shares}주</div>
                 </div>
                 <div className="rec-right">
                   <div className="rec-amt">{fmtMoney(cost,r.ticker)}</div>
